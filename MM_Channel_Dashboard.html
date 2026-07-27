@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PMax Channel / Inventory Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:#0f1117; --card:#1a1d27; --border:#2a2d3a;
+    --text:#e8eaf0; --muted:#8b8fa8; --accent:#4285F4;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; }
+  header { padding:24px 32px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+  header h1 { font-size:1.4rem; font-weight:700; letter-spacing:-.3px; }
+  header span { font-size:.8rem; color:var(--muted); }
+  .toolbar { padding:16px 32px; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+  .toolbar label { font-size:.8rem; color:var(--muted); margin-right:4px; }
+  select { background:#252836; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 12px; font-size:.85rem; cursor:pointer; }
+  select:focus { outline:none; border-color:var(--accent); }
+  .metric-tabs { display:flex; gap:4px; }
+  .metric-tab { padding:6px 14px; border-radius:6px; font-size:.8rem; cursor:pointer; border:1px solid var(--border); background:transparent; color:var(--muted); transition:all .15s; }
+  .metric-tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .section { padding:0 32px 32px; }
+  .section-title { font-size:.95rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin-bottom:16px; padding-top:24px; }
+  .charts-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; }
+  .card-title { font-size:.85rem; font-weight:600; margin-bottom:12px; }
+  .card canvas { max-height:180px; }
+  .summary-card { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; font-size:.82rem; }
+  thead tr { background:#12151e; }
+  th { padding:10px 14px; text-align:right; color:var(--muted); font-weight:500; white-space:nowrap; }
+  th:first-child { text-align:left; }
+  td { padding:9px 14px; text-align:right; border-top:1px solid var(--border); }
+  td:first-child { text-align:left; font-weight:600; }
+  tr:hover td { background:#1f2235; }
+  .ch-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; }
+  .wow-up { color:#34A853; font-size:.75rem; }
+  .wow-dn { color:#EA4335; font-size:.75rem; }
+  .wow-na { color:var(--muted); font-size:.75rem; }
+  .trend-bar-wrap { display:flex; align-items:center; gap:8px; }
+  .trend-bar { height:6px; border-radius:3px; min-width:2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PMax — Channel / Inventory Level Dashboard</h1>
+  <span id="latest-label"></span>
+</header>
+
+<div class="toolbar">
+  <div>
+    <label>Account</label>
+    <select id="account-filter">
+      <option value="all">All Accounts</option>
+    </select>
+  </div>
+  <div>
+    <label>Metric</label>
+    <div class="metric-tabs">
+      <button class="metric-tab active" data-metric="cost">Cost</button>
+      <button class="metric-tab" data-metric="conversions">Conversions</button>
+      <button class="metric-tab" data-metric="convValue">Conv. Value</button>
+      <button class="metric-tab" data-metric="roas">ROAS</button>
+      <button class="metric-tab" data-metric="impressions">Impressions</button>
+      <button class="metric-tab" data-metric="clicks">Clicks</button>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Latest Week Summary — All Channels</div>
+  <div class="summary-card">
+    <table id="summary-table">
+      <thead>
+        <tr>
+          <th>Channel</th>
+          <th>Cost (₹)</th>
+          <th>Impressions</th>
+          <th>Clicks</th>
+          <th>Conversions</th>
+          <th>Conv. Value (₹)</th>
+          <th>ROAS</th>
+          <th>CPA (₹)</th>
+          <th>Cost WoW</th>
+          <th>Conv WoW</th>
+        </tr>
+      </thead>
+      <tbody id="summary-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Weekly Trend — All Channels</div>
+  <div class="charts-grid" id="charts-grid"></div>
+</div>
+
+<script>
+const CHANNELS     = ["Google Search", "YouTube", "Google Display Network", "Discover", "Gmail", "Maps", "Search partners"];
+const COLORS       = {"Google Search": "#4285F4", "YouTube": "#FF0000", "Google Display Network": "#34A853", "Discover": "#FBBC05", "Gmail": "#EA4335", "Maps": "#1A73E8", "Search partners": "#9E69AF"};
+const ACCOUNTS     = ["MM 3.0", "Man Matters", "Man Matters 2.0"];
+const WEEKLY_ALL   = {"Google Search": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [5518933.19, 5557181.51, 5751385.94, 6141822.41, 5677871.47, 6410552.83, 7016861.83], "impressions": [13019976, 11608868, 13035574, 14294782, 12135572, 15660957, 18253593], "clicks": [244720, 222104, 230977, 249721, 243185, 280755, 290814], "conversions": [13295.8, 13049.03, 13721.87, 13786.89, 13533.1, 16198.1, 15136.87], "convValue": [19728267.48, 19454803.37, 20391416.92, 20514195.74, 19876476.39, 23373089.74, 22587532.74], "roas": [3.57, 3.5, 3.55, 3.34, 3.5, 3.65, 3.22], "cpa": [415.09, 425.87, 419.14, 445.48, 419.55, 395.76, 463.56]}, "YouTube": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [3022981.14, 2388609.97, 2269018.49, 2160643.36, 2795201.44, 2782665.77, 2576284.8], "impressions": [122993814, 83044209, 77962778, 73350046, 102955187, 100822056, 83215577], "clicks": [1251726, 947416, 697222, 820271, 1066882, 1017372, 979834], "conversions": [8674.98, 6015.89, 5599.73, 5632.3, 7045.39, 7525.85, 6931.02], "convValue": [14400445.95, 9922097.11, 9493592.02, 9204277.41, 11232737.28, 11498973.21, 10974565.71], "roas": [4.76, 4.15, 4.18, 4.26, 4.02, 4.13, 4.26], "cpa": [348.47, 397.05, 405.2, 383.62, 396.74, 369.75, 371.7]}, "Google Display Network": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [32222.28, 41473.77, 68561.06, 76405.31, 83766.86, 106816.83, 75641.73], "impressions": [490199, 696936, 1426864, 1743226, 1506614, 2543691, 1930187], "clicks": [11674, 16513, 35571, 49225, 32524, 74010, 46758], "conversions": [32.59, 28.87, 74.3, 92.7, 95.97, 218.01, 167.5], "convValue": [42775.89, 49673.44, 110439.46, 141269.56, 150917.57, 299799.81, 252488.3], "roas": [1.33, 1.2, 1.61, 1.85, 1.8, 2.81, 3.34], "cpa": [988.72, 1436.57, 922.76, 824.22, 872.84, 489.96, 451.59]}, "Discover": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [61235.09, 63359.01, 67758.89, 67996.28, 306848.79, 174567.37, 64724.88], "impressions": [986101, 1002601, 775825, 817262, 2136990, 1737149, 829350], "clicks": [21661, 21869, 19211, 20312, 35316, 30287, 20976], "conversions": [116.43, 113.77, 94.2, 125.22, 189.77, 121.28, 112.7], "convValue": [160028.4, 146613.77, 125100.29, 164904.73, 276973.58, 149648.94, 134108.05], "roas": [2.61, 2.31, 1.85, 2.43, 0.9, 0.86, 2.07], "cpa": [525.94, 556.9, 719.31, 543.01, 1616.95, 1439.37, 574.31]}, "Gmail": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [37965.48, 39077.48, 30082.81, 24944.71, 26953.72, 24810.25, 26605.07], "impressions": [314651, 299623, 232960, 187141, 198279, 186909, 210475], "clicks": [2906, 3484, 2205, 1564, 1080, 892, 937], "conversions": [75.89, 53.09, 55.2, 50.83, 36.07, 35.22, 22.05], "convValue": [125751.6, 75452.08, 88610.26, 79562.08, 58700.63, 58650.77, 35000.53], "roas": [3.31, 1.93, 2.95, 3.19, 2.18, 2.36, 1.32], "cpa": [500.27, 736.06, 544.98, 490.75, 747.26, 704.44, 1206.58]}, "Maps": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "impressions": [0, 0, 0, 0, 0, 0, 0], "clicks": [0, 0, 0, 0, 0, 0, 0], "conversions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "convValue": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "roas": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "cpa": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}, "Search partners": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [1590.28, 6551.45, 9142.09, 7353.65, 3696.04, 9329.33, 15821.83], "impressions": [14956, 15658, 24332, 19907, 15776, 21049, 43685], "clicks": [362, 2206, 3259, 2493, 1620, 1786, 3977], "conversions": [1.0, 0.0, 1.0, 0.0, 0.0, 6.0, 6.0], "convValue": [1968.0, 0.0, 2998.0, 0.0, 0.0, 8529.07, 12854.0], "roas": [1.24, 0.0, 0.33, 0.0, 0.0, 0.91, 0.81], "cpa": [1590.28, 0.0, 9142.09, 0.0, 0.0, 1554.89, 2636.97]}};
+const WEEKLY_ACC   = {"MM 3.0": {"Google Search": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [226276.09, 419175.2, 576567.4, 721470.27, 458377.46, 268308.03, 277465.84], "impressions": [837509, 1100119, 1429519, 1678070, 875216, 112925, 534639], "clicks": [9084, 14296, 18235, 22300, 13350, 4394, 7525], "conversions": [431.73, 686.34, 994.14, 1139.56, 718.47, 423.0, 503.43], "convValue": [710268.37, 1126526.14, 1697423.41, 1962127.94, 1287208.3, 797876.27, 877409.66], "roas": [3.14, 2.69, 2.94, 2.72, 2.81, 2.97, 3.16], "cpa": [524.11, 610.74, 579.97, 633.11, 637.99, 634.3, 551.15]}, "YouTube": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [113092.84, 101753.85, 63516.98, 93296.44, 143315.82, 117719.77, 133456.2], "impressions": [3885728, 3147632, 1540517, 2409198, 5866890, 4849063, 4216117], "clicks": [31324, 29331, 17602, 32046, 44322, 27534, 46425], "conversions": [220.2, 136.35, 121.23, 144.4, 162.48, 219.51, 203.33], "convValue": [383027.68, 246621.24, 216125.01, 262530.79, 314581.97, 405705.69, 386121.61], "roas": [3.39, 2.42, 3.4, 2.81, 2.2, 3.45, 2.89], "cpa": [513.59, 746.27, 523.94, 646.1, 882.05, 536.28, 656.35]}, "Google Display Network": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [3593.21, 5515.45, 9344.13, 11146.48, 29565.95, 10293.88, 4109.15], "impressions": [44723, 86451, 127832, 217340, 450269, 116521, 46919], "clicks": [1988, 1938, 1962, 2586, 7754, 894, 63], "conversions": [5.87, 3.0, 11.2, 15.04, 15.39, 8.78, 7.0], "convValue": [8432.44, 5897.0, 19857.4, 23754.19, 29656.43, 14969.6, 11824.0], "roas": [2.35, 1.07, 2.13, 2.13, 1.0, 1.45, 2.88], "cpa": [612.13, 1838.48, 834.3, 741.12, 1921.11, 1172.42, 587.02]}, "Discover": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [1278.5, 1218.38, 1312.65, 688.95, 121608.1, 57956.02, 1163.7], "impressions": [8455, 14459, 9556, 4877, 666366, 501113, 7316], "clicks": [114, 188, 123, 76, 7642, 6053, 146], "conversions": [2.0, 2.0, 0.0, 1.59, 19.69, 4.07, 1.0], "convValue": [3430.0, 4997.0, 0.0, 4419.31, 39711.76, 6102.32, 1999.0], "roas": [2.68, 4.1, 0.0, 6.41, 0.33, 0.11, 1.72], "cpa": [639.25, 609.19, 0.0, 433.3, 6176.14, 14239.81, 1163.7]}, "Gmail": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [792.46, 1735.47, 1584.7, 1323.74, 218.46, 30.75, 52.97], "impressions": [5921, 12444, 14024, 11495, 1713, 197, 376], "clicks": [53, 86, 61, 50, 1, 1, 5], "conversions": [3.14, 0.0, 1.0, 3.0, 0.0, 0.0, 0.0], "convValue": [5926.08, 0.0, 1649.0, 5847.0, 0.0, 0.0, 0.0], "roas": [7.48, 0.0, 1.04, 4.42, 0.0, 0.0, 0.0], "cpa": [252.38, 0.0, 1584.7, 441.25, 0.0, 0.0, 0.0]}, "Maps": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "impressions": [0, 0, 0, 0, 0, 0, 0], "clicks": [0, 0, 0, 0, 0, 0, 0], "conversions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "convValue": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "roas": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "cpa": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}, "Search partners": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [61.62, 2787.05, 3645.11, 971.67, 709.49, 229.14, 983.38], "impressions": [473, 4169, 6945, 2692, 2463, 428, 3110], "clicks": [15, 915, 1333, 367, 340, 90, 348], "conversions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "convValue": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "roas": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "cpa": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}}, "Man Matters": {"Google Search": {"labels": ["Wk7 (8Jun-14Jun)"], "cost": [0.0], "impressions": [0], "clicks": [0], "conversions": [0.0], "convValue": [0.0], "roas": [0.0], "cpa": [0.0]}, "YouTube": {"labels": ["Wk7 (8Jun-14Jun)"], "cost": [0.0], "impressions": [0], "clicks": [0], "conversions": [0.0], "convValue": [0.0], "roas": [0.0], "cpa": [0.0]}, "Google Display Network": {"labels": ["Wk7 (8Jun-14Jun)"], "cost": [0.0], "impressions": [0], "clicks": [0], "conversions": [0.0], "convValue": [0.0], "roas": [0.0], "cpa": [0.0]}, "Discover": {"labels": ["Wk7 (8Jun-14Jun)"], "cost": [0.0], "impressions": [0], "clicks": [0], "conversions": [0.0], "convValue": [0.0], "roas": [0.0], "cpa": [0.0]}, "Gmail": {"labels": ["Wk7 (8Jun-14Jun)"], "cost": [0.0], "impressions": [0], "clicks": [0], "conversions": [0.0], "convValue": [0.0], "roas": [0.0], "cpa": [0.0]}, "Maps": {"labels": ["Wk7 (8Jun-14Jun)"], "cost": [0.0], "impressions": [0], "clicks": [0], "conversions": [0.0], "convValue": [0.0], "roas": [0.0], "cpa": [0.0]}, "Search partners": {"labels": ["Wk7 (8Jun-14Jun)"], "cost": [0.0], "impressions": [0], "clicks": [0], "conversions": [0.0], "convValue": [0.0], "roas": [0.0], "cpa": [0.0]}}, "Man Matters 2.0": {"Google Search": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [1353075.08, 1222969.86, 1224974.23, 1196211.86, 1170688.73, 1523919.47, 1892221.75], "impressions": [2206797, 1857016, 2096331, 2113685, 1759793, 4004352, 4871616], "clicks": [49762, 41163, 41534, 41428, 47466, 71595, 77573], "conversions": [2859.16, 2823.0, 2871.57, 2692.27, 2938.45, 4118.51, 4066.04], "convValue": [4826522.89, 4834126.17, 4833993.08, 4563945.74, 4879856.55, 6626264.15, 6672084.26], "roas": [3.57, 3.95, 3.95, 3.82, 4.17, 4.35, 3.53], "cpa": [473.24, 433.22, 426.59, 444.31, 398.4, 370.02, 465.37]}, "YouTube": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [530715.81, 548272.64, 688613.76, 575024.99, 742026.81, 747135.2, 635711.63], "impressions": [18368206, 16380141, 22581985, 17946808, 22907503, 21368200, 15050245], "clicks": [117146, 125005, 136977, 149116, 192961, 200916, 168078], "conversions": [1172.32, 1160.46, 1434.38, 1377.81, 1849.86, 2049.01, 1697.75], "convValue": [2193700.77, 2147067.67, 2719011.85, 2449888.16, 3160605.06, 3332836.15, 2962421.77], "roas": [4.13, 3.92, 3.95, 4.26, 4.26, 4.46, 4.66], "cpa": [452.71, 472.46, 480.08, 417.35, 401.13, 364.63, 374.44]}, "Google Display Network": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [5277.36, 2696.32, 8926.01, 8217.07, 5043.22, 33470.34, 23326.01], "impressions": [87290, 63951, 236952, 212272, 118273, 898170, 657414], "clicks": [1613, 1616, 6064, 6919, 4363, 29939, 15811], "conversions": [1.1, 6.12, 13.85, 18.38, 22.9, 85.33, 60.14], "convValue": [1499.86, 11086.83, 18456.37, 28955.39, 31962.77, 115171.39, 91252.36], "roas": [0.28, 4.11, 2.07, 3.52, 6.34, 3.44, 3.91], "cpa": [4797.6, 440.58, 644.48, 447.07, 220.23, 392.25, 387.86]}, "Discover": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [5477.76, 2990.2, 2766.22, 3635.72, 3407.62, 2672.22, 3146.91], "impressions": [49188, 30687, 20500, 28729, 26475, 22000, 27585], "clicks": [953, 614, 588, 802, 806, 579, 705], "conversions": [7.3, 7.8, 3.53, 5.4, 17.61, 5.13, 2.02], "convValue": [10452.69, 13183.68, 5919.27, 9906.89, 27019.6, 8794.49, 1693.34], "roas": [1.91, 4.41, 2.14, 2.72, 7.93, 3.29, 0.54], "cpa": [750.38, 383.36, 783.63, 673.28, 193.5, 520.9, 1557.88]}, "Gmail": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [7396.17, 4013.72, 1768.2, 1762.84, 1455.87, 2525.96, 4325.43], "impressions": [66888, 30397, 16849, 15475, 13744, 22611, 39062], "clicks": [506, 152, 91, 96, 54, 99, 191], "conversions": [9.55, 4.52, 8.0, 7.13, 2.28, 3.55, 4.52], "convValue": [16421.32, 8301.01, 12702.1, 12500.14, 8528.66, 8677.7, 7792.18], "roas": [2.22, 2.07, 7.18, 7.09, 5.86, 3.44, 1.8], "cpa": [774.47, 887.99, 221.02, 247.24, 638.54, 711.54, 956.95]}, "Maps": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "impressions": [0, 0, 0, 0, 0, 0, 0], "clicks": [0, 0, 0, 0, 0, 0, 0], "conversions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "convValue": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "roas": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "cpa": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}, "Search partners": {"labels": ["Wk1 (27Apr-3May)", "Wk2 (4May-10May)", "Wk3 (11May-17May)", "Wk4 (18May-24May)", "Wk5 (25May-31May)", "Wk6 (1Jun-7Jun)", "Wk7 (8Jun-14Jun)"], "cost": [488.51, 357.08, 715.09, 568.47, 147.67, 313.87, 801.35], "impressions": [3040, 1653, 2501, 1859, 1083, 4108, 6059], "clicks": [118, 164, 251, 175, 62, 119, 143], "conversions": [0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 3.0], "convValue": [0.0, 0.0, 0.0, 0.0, 0.0, 2677.0, 6427.0], "roas": [0.0, 0.0, 0.0, 0.0, 0.0, 8.53, 8.02], "cpa": [0.0, 0.0, 0.0, 0.0, 0.0, 156.93, 267.12]}}};
+const SUMMARY_DATA = [{"channel": "Google Search", "cost": 7016861.83, "impressions": 18253593, "clicks": 290814, "conversions": 15136.87, "convValue": 22587532.74, "roas": 3.22, "cpa": 463.56, "costWoW": 9.5, "convWoW": -6.6}, {"channel": "YouTube", "cost": 2576284.8, "impressions": 83215577, "clicks": 979834, "conversions": 6931.02, "convValue": 10974565.71, "roas": 4.26, "cpa": 371.7, "costWoW": -7.4, "convWoW": -7.9}, {"channel": "Google Display Network", "cost": 75641.73, "impressions": 1930187, "clicks": 46758, "conversions": 167.5, "convValue": 252488.3, "roas": 3.34, "cpa": 451.59, "costWoW": -29.2, "convWoW": -23.2}, {"channel": "Discover", "cost": 64724.88, "impressions": 829350, "clicks": 20976, "conversions": 112.7, "convValue": 134108.05, "roas": 2.07, "cpa": 574.31, "costWoW": -62.9, "convWoW": -7.1}, {"channel": "Gmail", "cost": 26605.07, "impressions": 210475, "clicks": 937, "conversions": 22.05, "convValue": 35000.53, "roas": 1.32, "cpa": 1206.58, "costWoW": 7.2, "convWoW": -37.4}, {"channel": "Maps", "cost": 0.0, "impressions": 0, "clicks": 0, "conversions": 0.0, "convValue": 0.0, "roas": NaN, "cpa": NaN, "costWoW": null, "convWoW": null}, {"channel": "Search partners", "cost": 15821.83, "impressions": 43685, "clicks": 3977, "conversions": 6.0, "convValue": 12854.0, "roas": 0.81, "cpa": 2636.97, "costWoW": 69.6, "convWoW": 0.0}];
+const LATEST_LBL   = "Wk7 (8Jun-14Jun)";
+
+let activeMetric  = "cost";
+let activeAccount = "all";
+const chartInstances = {};
+
+const METRIC_LABELS = {
+  cost:"Cost (₹)", conversions:"Conversions", convValue:"Conv. Value (₹)",
+  roas:"ROAS", impressions:"Impressions", clicks:"Clicks"
+};
+
+// Populate account dropdown
+const sel = document.getElementById("account-filter");
+ACCOUNTS.forEach(a => {
+  const o = document.createElement("option"); o.value=a; o.textContent=a; sel.appendChild(o);
+});
+document.getElementById("latest-label").textContent = "Latest week: " + LATEST_LBL;
+
+// ── Summary table ─────────────────────────────────────────────────────────────
+function renderSummary() {
+  const tbody = document.getElementById("summary-body");
+  tbody.innerHTML = "";
+  let totalCost=0, totalImpr=0, totalClicks=0, totalConv=0, totalVal=0;
+  SUMMARY_DATA.forEach(r => {
+    totalCost+=r.cost; totalImpr+=r.impressions; totalClicks+=r.clicks;
+    totalConv+=r.conversions; totalVal+=r.convValue;
+    const wowClass = v => v==null ? "wow-na" : v>=0 ? "wow-up" : "wow-dn";
+    const wowStr   = v => v==null ? "–" : (v>=0?"+":"")+v+"%";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><span class="ch-dot" style="background:${COLORS[r.channel]}"></span>${r.channel}</td>
+      <td>₹${r.cost.toLocaleString("en-IN",{maximumFractionDigits:0})}</td>
+      <td>${r.impressions.toLocaleString("en-IN")}</td>
+      <td>${r.clicks.toLocaleString("en-IN")}</td>
+      <td>${r.conversions.toLocaleString("en-IN",{maximumFractionDigits:1})}</td>
+      <td>₹${r.convValue.toLocaleString("en-IN",{maximumFractionDigits:0})}</td>
+      <td>${r.roas || "–"}</td>
+      <td>${r.cpa ? "₹"+r.cpa.toLocaleString("en-IN",{maximumFractionDigits:0}) : "–"}</td>
+      <td class="${wowClass(r.costWoW)}">${wowStr(r.costWoW)}</td>
+      <td class="${wowClass(r.convWoW)}">${wowStr(r.convWoW)}</td>`;
+    tbody.appendChild(tr);
+  });
+  const totalROAS = totalCost > 0 ? (totalVal/totalCost).toFixed(2) : "–";
+  const tfoot = document.createElement("tr");
+  tfoot.style.fontWeight="700"; tfoot.style.background="#12151e";
+  tfoot.innerHTML = `
+    <td>Total</td>
+    <td>₹${totalCost.toLocaleString("en-IN",{maximumFractionDigits:0})}</td>
+    <td>${totalImpr.toLocaleString("en-IN")}</td>
+    <td>${totalClicks.toLocaleString("en-IN")}</td>
+    <td>${totalConv.toLocaleString("en-IN",{maximumFractionDigits:1})}</td>
+    <td>₹${totalVal.toLocaleString("en-IN",{maximumFractionDigits:0})}</td>
+    <td>${totalROAS}</td><td></td><td></td><td></td>`;
+  tbody.appendChild(tfoot);
+}
+renderSummary();
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+function getChannelData(ch) {
+  if (activeAccount === "all") return WEEKLY_ALL[ch] || null;
+  return (WEEKLY_ACC[activeAccount] && WEEKLY_ACC[activeAccount][ch]) || null;
+}
+
+function buildCharts() {
+  const grid = document.getElementById("charts-grid");
+  grid.innerHTML = "";
+  CHANNELS.forEach(ch => {
+    const data = getChannelData(ch);
+    if (!data) return;
+    const card = document.createElement("div"); card.className="card";
+    card.innerHTML = `<div class="card-title"><span class="ch-dot" style="background:${COLORS[ch]}"></span>${ch}</div><canvas id="chart-${ch.replace(/\s/g,'_')}"></canvas>`;
+    grid.appendChild(card);
+  });
+  CHANNELS.forEach(ch => {
+    const data = getChannelData(ch);
+    if (!data) return;
+    const canvasId = "chart-"+ch.replace(/\s/g,"_");
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    if (chartInstances[ch]) { chartInstances[ch].destroy(); }
+    chartInstances[ch] = new Chart(ctx, {
+      type:"bar",
+      data:{
+        labels: data.labels,
+        datasets:[{
+          label: METRIC_LABELS[activeMetric],
+          data: data[activeMetric],
+          backgroundColor: COLORS[ch]+"99",
+          borderColor: COLORS[ch],
+          borderWidth:2,
+          borderRadius:4,
+        }]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:true,
+        plugins:{ legend:{display:false}, tooltip:{
+          callbacks:{
+            label: ctx => {
+              const v = ctx.parsed.y;
+              if (activeMetric==="cost"||activeMetric==="convValue") return "₹"+v.toLocaleString("en-IN",{maximumFractionDigits:0});
+              if (activeMetric==="roas") return v.toFixed(2)+"x";
+              return v.toLocaleString("en-IN",{maximumFractionDigits:1});
+            }
+          }
+        }},
+        scales:{
+          x:{ ticks:{color:"#8b8fa8",font:{size:9},maxRotation:30}, grid:{color:"#1e2133"} },
+          y:{ ticks:{color:"#8b8fa8",font:{size:9}}, grid:{color:"#1e2133"} }
+        }
+      }
+    });
+  });
+}
+buildCharts();
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+document.querySelectorAll(".metric-tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".metric-tab").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active");
+    activeMetric = btn.dataset.metric;
+    buildCharts();
+  });
+});
+
+sel.addEventListener("change", () => {
+  activeAccount = sel.value;
+  buildCharts();
+});
+</script>
+</body>
+</html>
